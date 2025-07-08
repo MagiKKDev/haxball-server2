@@ -87,24 +87,29 @@ wss.on('connection', ws => {
       const data = JSON.parse(message);
 
       if (data.type === 'move' && players[id]) {
-        // ograniczenie ruchu gracza do boiska
-        players[id].x = Math.min(FIELD_WIDTH - players[id].radius, Math.max(players[id].radius, data.x));
-        players[id].y = Math.min(FIELD_HEIGHT - players[id].radius, Math.max(players[id].radius, data.y));
+        // Limit ruchu gracza do boiska
+        players[id].x = Math.min(FIELD_WIDTH - 15, Math.max(15, data.x));
+        players[id].y = Math.min(FIELD_HEIGHT - 15, Math.max(15, data.y));
       } else if (data.type === 'kick' && players[id]) {
         const dx = ball.x - players[id].x;
         const dy = ball.y - players[id].y;
         const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < 25) {
+          let forceMultiplier = data.strong ? 0.6 : 0.3; // mocniejszy kick pod spacją
+          ball.speedX = dx * forceMultiplier;
+          ball.speedY = dy * forceMultiplier;
 
-        if (dist < 30) {
-          // Siła kopnięcia piłki
-          ball.speedX = dx * 0.5;
-          ball.speedY = dy * 0.5;
+          // Limit prędkości piłki
+          if (ball.speedX > ball.maxSpeed) ball.speedX = ball.maxSpeed;
+          if (ball.speedX < -ball.maxSpeed) ball.speedX = -ball.maxSpeed;
+          if (ball.speedY > ball.maxSpeed) ball.speedY = ball.maxSpeed;
+          if (ball.speedY < -ball.maxSpeed) ball.speedY = -ball.maxSpeed;
         }
-      } else if (data.type === 'nick' && players[id]) {
-        players[id].nick = data.nick.trim().substring(0, 15) || 'anon';
+      } else if (data.type === 'nick') {
+        players[id].nick = data.nick || 'anon';
       }
     } catch (e) {
-      console.error('Error parsing message:', e);
+      console.error('Error parsing message', e);
     }
   });
 
