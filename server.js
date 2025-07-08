@@ -1,36 +1,40 @@
 const WebSocket = require('ws');
 
-const PORT = process.env.PORT || 8080;
+const PORT = 8080;
 const wss = new WebSocket.Server({ port: PORT });
 
-const FIELD_WIDTH = 900;
-const FIELD_HEIGHT = 500;
-const PLAYER_RADIUS = 20;
-const BALL_RADIUS = 12;
-const GOAL_WIDTH = 10;
-const GOAL_HEIGHT = 150;
-const GOAL_Y = (FIELD_HEIGHT - GOAL_HEIGHT) / 2;
+const FIELD = {
+  width: 1000,
+  height: 600,
+  goalWidth: 20,
+  goalHeight: 180,
+  goalY: (600 - 180) / 2,
+  playerRadius: 25,
+  ballRadius: 15,
+};
 
-const TICK_RATE = 20; // 50ms
+const SPEED_LIMIT = 10;
+const FRICTION = 0.95;
+const BALL_FRICTION = 0.97;
+const KICK_POWER = 12;
 
-let players = {}; // id -> { x, y, nickname, ws }
+let players = {}; // id: {x, y, nickname, ws}
 let ball = {
-  x: FIELD_WIDTH / 2,
-  y: FIELD_HEIGHT / 2,
+  x: FIELD.width / 2,
+  y: FIELD.height / 2,
   vx: 0,
   vy: 0,
 };
 let score = { left: 0, right: 0 };
-
-let playerIdCounter = 1;
+let playerCount = 0;
 
 function distance(a, b) {
-  return Math.sqrt((a.x - b.x)**2 + (a.y - b.y)**2);
+  return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
 function resetBall() {
-  ball.x = FIELD_WIDTH / 2;
-  ball.y = FIELD_HEIGHT / 2;
+  ball.x = FIELD.width / 2;
+  ball.y = FIELD.height / 2;
   ball.vx = 0;
   ball.vy = 0;
 }
@@ -42,66 +46,71 @@ function broadcast(data) {
   });
 }
 
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
 function updateBall() {
   ball.x += ball.vx;
   ball.y += ball.vy;
 
-  ball.vx *= 0.98;
-  ball.vy *= 0.98;
+  ball.vx *= BALL_FRICTION;
+  ball.vy *= BALL_FRICTION;
 
-  // Odbicia od ścian i bramek
-  if (ball.x < BALL_RADIUS) {
-    if (ball.y > GOAL_Y && ball.y < GOAL_Y + GOAL_HEIGHT) {
-      // Gol dla prawej drużyny
+  // Odbij od góry/dna
+  if (ball.y < FIELD.ballRadius) {
+    ball.y = FIELD.ballRadius;
+    ball.vy = -ball.vy;
+  }
+  if (ball.y > FIELD.height - FIELD.ballRadius) {
+    ball.y = FIELD.height - FIELD.ballRadius;
+    ball.vy = -ball.vy;
+  }
+
+  // Lewa bramka i ściana
+  if (ball.x < FIELD.ballRadius + FIELD.goalWidth) {
+    if (ball.y > FIELD.goalY && ball.y < FIELD.goalY + FIELD.goalHeight) {
+      // Gol dla prawego
       score.right++;
       broadcast({ type: 'goal', score });
       resetBall();
-      return;
+    } else if (ball.x < FIELD.ballRadius) {
+      ball.x = FIELD.ballRadius;
+      ball.vx = -ball.vx;
     }
-    ball.vx = -ball.vx;
-    ball.x = BALL_RADIUS;
   }
-  if (ball.x > FIELD_WIDTH - BALL_RADIUS) {
-    if (ball.y > GOAL_Y && ball.y < GOAL_Y + GOAL_HEIGHT) {
-      // Gol dla lewej drużyny
+
+  // Prawa bramka i ściana
+  if (ball.x > FIELD.width - FIELD.ballRadius - FIELD.goalWidth) {
+    if (ball.y > FIELD.goalY && ball.y < FIELD.goalY + FIELD.goalHeight) {
+      // Gol dla lewego
       score.left++;
       broadcast({ type: 'goal', score });
       resetBall();
-      return;
+    } else if (ball.x > FIELD.width - FIELD.ballRadius) {
+      ball.x = FIELD.width - FIELD.ballRadius;
+      ball.vx = -ball.vx;
     }
-    ball.vx = -ball.vx;
-    ball.x = FIELD_WIDTH - BALL_RADIUS;
-  }
-  if (ball.y < BALL_RADIUS) {
-    ball.vy = -ball.vy;
-    ball.y = BALL_RADIUS;
-  }
-  if (ball.y > FIELD_HEIGHT - BALL_RADIUS) {
-    ball.vy = -ball.vy;
-    ball.y = FIELD_HEIGHT - BALL_RADIUS;
   }
 }
 
-function handlePlayerMovement(player) {
-  player.x = Math.min(FIELD_WIDTH - PLAYER_RADIUS, Math.max(PLAYER_RADIUS, player.x));
-  player.y = Math.min(FIELD_HEIGHT - PLAYER_RADIUS, Math.max(PLAYER_RADIUS, player.y));
-}
-
-function gameTick() {
+function gameLoop() {
+  // Aktualizacja piłki
   updateBall();
 
-  for (const id in players) {
-    const p = players[id];
+  // Kolizje piłki z graczami
+  Object.values(players).forEach(p => {
     const dist = distance(p, ball);
-    if (dist < PLAYER_RADIUS + BALL_RADIUS) {
-      // Kopnięcie piłki przy kontakcie
+    if (dist < FIELD.playerRadius + FIELD.ballRadius) {
+      // Kopnięcie piłki
       const angle = Math.atan2(ball.y - p.y, ball.x - p.x);
-      ball.vx = Math.cos(angle) * 7;
-      ball.vy = Math.sin(angle) * 7;
-      ball.x = p.x + (PLAYER_RADIUS + BALL_RADIUS + 1) * Math.cos(angle);
-      ball.y = p.y + (PLAYER_RADIUS + BALL_RADIUS + 1) * Math.sin(angle);
+      ball.vx = Math.cos(angle) * KICK_POWER;
+      ball.vy = Math.sin(angle) * KICK_POWER;
+      // Ustaw piłkę na zewnątrz gracza, żeby nie "wtopiła się"
+      ball.x = p.x + (FIELD.playerRadius + FIELD.ballRadius) * Math.cos(angle);
+      ball.y = p.y + (FIELD.playerRadius + FIELD.ballRadius) * Math.sin(angle);
     }
-  }
+  });
 
   broadcast({
     type: 'state',
@@ -112,55 +121,61 @@ function gameTick() {
 }
 
 wss.on('connection', ws => {
-  if (Object.keys(players).length >= 2) {
-    ws.send(JSON.stringify({ type: 'full', message: 'Serwer pełny. Spróbuj później.' }));
+  if (playerCount >= 2) {
+    ws.send(JSON.stringify({ type: 'full', message: 'Serwer pełny, spróbuj później.' }));
     ws.close();
     return;
   }
 
-  const playerId = playerIdCounter++;
-  players[playerId] = {
-    x: playerId === 1 ? 100 : FIELD_WIDTH - 100,
-    y: FIELD_HEIGHT / 2,
+  playerCount++;
+  const id = playerCount;
+  players[id] = {
+    x: id === 1 ? FIELD.playerRadius + FIELD.goalWidth + 50 : FIELD.width - FIELD.playerRadius - FIELD.goalWidth - 50,
+    y: FIELD.height / 2,
     nickname: 'Anon',
     ws,
   };
 
   ws.send(JSON.stringify({
     type: 'init',
-    id: playerId,
-    players: Object.fromEntries(Object.entries(players).map(([id, p]) => [id, { x: p.x, y: p.y, nickname: p.nickname }])),
+    id,
+    players: Object.fromEntries(Object.entries(players).map(([pid, p]) => [pid, { x: p.x, y: p.y, nickname: p.nickname }])),
     ball,
     score,
+    field: FIELD,
   }));
 
-  ws.on('message', msg => {
+  ws.on('message', message => {
     try {
-      const data = JSON.parse(msg);
-      const p = players[playerId];
-      if (!p) return;
+      const data = JSON.parse(message);
+      const player = players[id];
+      if (!player) return;
 
       if (data.type === 'join' && typeof data.nickname === 'string') {
-        p.nickname = data.nickname.slice(0, 15);
+        player.nickname = data.nickname.trim().slice(0, 15);
       }
+
       if (data.type === 'move') {
-        p.x = data.x;
-        p.y = data.y;
-        handlePlayerMovement(p);
+        // Ogranicz ruch w granicach boiska
+        player.x = clamp(data.x, FIELD.playerRadius + FIELD.goalWidth, FIELD.width - FIELD.playerRadius - FIELD.goalWidth);
+        player.y = clamp(data.y, FIELD.playerRadius, FIELD.height - FIELD.playerRadius);
       }
+
       if (data.type === 'kick') {
-        // Opcjonalnie można dodać kopnięcie na serwerze (na razie ignorujemy)
+        // Można tu dodać dodatkową logikę kicka na serwerze, ale obecnie obsługujemy w update ball
       }
+
     } catch (e) {
-      console.error('Błąd parsowania wiadomości:', e);
+      console.error('Błąd parsowania:', e);
     }
   });
 
   ws.on('close', () => {
-    delete players[playerId];
+    delete players[id];
+    playerCount--;
   });
 });
 
-setInterval(gameTick, 1000 / TICK_RATE);
+setInterval(gameLoop, 1000 / 30);
 
-console.log(`Serwer WebSocket działa na porcie ${PORT}`);
+console.log(`Serwer działa na porcie ${PORT}`);
