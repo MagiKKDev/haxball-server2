@@ -1,112 +1,95 @@
+const express = require("express");
+const http = require("http");
 const WebSocket = require("ws");
+const path = require("path");
 
-const wss = new WebSocket.Server({ port: 8080 });
-const FIELD_WIDTH = 1800;
-const FIELD_HEIGHT = 1000;
-const PLAYER_RADIUS = 20;
-const BALL_RADIUS = 12;
-const KICK_STRENGTH = 6;
+const app = express();
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ server });
 
-let players = {};
-let ball = { x: FIELD_WIDTH/2, y: FIELD_HEIGHT/2, vx: 0, vy: 0, radius: BALL_RADIUS };
-let score = { left: 0, right: 0 };
+const PORT = 8080;
+let players = [];
 
-wss.on("connection", ws => {
-  const id = Date.now().toString();
-  const spawnX = Math.random() > 0.5 ? 200 : FIELD_WIDTH - 200;
-  players[id] = {
-    x: spawnX,
-    y: FIELD_HEIGHT / 2,
+app.use(express.static(path.join(__dirname)));
+
+wss.on("connection", (ws) => {
+  const player = {
+    id: Date.now(),
+    x: 100 + Math.random() * 400,
+    y: 100 + Math.random() * 300,
     vx: 0,
     vy: 0,
-    nick: "anon",
-    radius: PLAYER_RADIUS,
-    keys: {}
+    nick: "Anon"
   };
 
-  ws.send(JSON.stringify({ type: "id", id }));
+  players.push({ ws, data: player });
 
-  ws.on("message", msg => {
-    const data = JSON.parse(msg);
-    if (data.type === "nick") {
-      players[id].nick = data.nick.substring(0, 15);
-    } else if (data.type === "move") {
-      players[id].keys = data.keys;
-    } else if (data.type === "kick") {
-      const p = players[id];
-      const dx = ball.x - p.x;
-      const dy = ball.y - p.y;
-      const dist = Math.hypot(dx, dy);
-      if (dist < p.radius + ball.radius + 10) {
-        ball.vx += (dx / dist) * KICK_STRENGTH;
-        ball.vy += (dy / dist) * KICK_STRENGTH;
-      }
+  ws.on("message", (msg) => {
+    const parsed = JSON.parse(msg);
+    if (parsed.type === "move") {
+      player.vx = parsed.vx;
+      player.vy = parsed.vy;
+    } else if (parsed.type === "nick") {
+      player.nick = parsed.nick || "Anon";
     }
   });
 
   ws.on("close", () => {
-    delete players[id];
+    players = players.filter(p => p.ws !== ws);
   });
 });
 
-setInterval(() => {
-  for (const id in players) {
-    const p = players[id];
-    const speed = 5;
-    if (p.keys.w) p.y -= speed;
-    if (p.keys.s) p.y += speed;
-    if (p.keys.a) p.x -= speed;
-    if (p.keys.d) p.x += speed;
+let ball = {
+  x: 400,
+  y: 300,
+  vx: 0,
+  vy: 0
+};
 
-    p.x = Math.max(p.radius, Math.min(FIELD_WIDTH - p.radius, p.x));
-    p.y = Math.max(p.radius, Math.min(FIELD_HEIGHT - p.radius, p.y));
+setInterval(() => {
+  for (let p of players) {
+    const d = p.data;
+    d.x += d.vx;
+    d.y += d.vy;
+
+    // Ograniczenia boiska
+    d.x = Math.max(10, Math.min(790, d.x));
+    d.y = Math.max(10, Math.min(590, d.y));
 
     // Kolizja z piłką
-    const dx = ball.x - p.x;
-    const dy = ball.y - p.y;
-    const dist = Math.hypot(dx, dy);
-    if (dist < p.radius + ball.radius) {
-      const overlap = p.radius + ball.radius - dist;
-      const nx = dx / dist;
-      const ny = dy / dist;
-      ball.x += nx * overlap;
-      ball.y += ny * overlap;
-      ball.vx += nx * 0.5;
-      ball.vy += ny * 0.5;
+    const dx = ball.x - d.x;
+    const dy = ball.y - d.y;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+    if (dist < 20) {
+      const angle = Math.atan2(dy, dx);
+      ball.vx += Math.cos(angle) * 1.5;
+      ball.vy += Math.sin(angle) * 1.5;
     }
   }
 
+  // Ruch piłki
   ball.x += ball.vx;
   ball.y += ball.vy;
   ball.vx *= 0.99;
   ball.vy *= 0.99;
 
-  if (ball.y < ball.radius || ball.y > FIELD_HEIGHT - ball.radius) ball.vy *= -1;
-  if (ball.x < 0) {
-    score.right++;
-    resetBall();
-  } else if (ball.x > FIELD_WIDTH) {
-    score.left++;
-    resetBall();
-  }
+  // Odbicie od ścian
+  if (ball.x < 10 || ball.x > 790) ball.vx *= -1;
+  if (ball.y < 10 || ball.y > 590) ball.vy *= -1;
 
   const state = {
-    type: "state",
-    players,
-    ball,
-    score
+    players: players.map(p => p.data),
+    ball
   };
 
   const json = JSON.stringify(state);
-  wss.clients.forEach(client => {
-    if (client.readyState === WebSocket.OPEN) client.send(json);
+  players.forEach(p => {
+    if (p.ws.readyState === WebSocket.OPEN) {
+      p.ws.send(json);
+    }
   });
+}, 16);
 
-}, 1000 / 60);
-
-function resetBall() {
-  ball.x = FIELD_WIDTH / 2;
-  ball.y = FIELD_HEIGHT / 2;
-  ball.vx = 0;
-  ball.vy = 0;
-}
+server.listen(PORT, () => {
+  console.log(`✅ Serwer działa na http://localhost:${PORT}`);
+});
