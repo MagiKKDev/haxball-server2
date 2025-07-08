@@ -4,8 +4,8 @@ const wss = new WebSocket.Server({ port: 8080 });
 
 let players = {};
 let ball = {
-  x: 450,
-  y: 300,
+  x: 600,
+  y: 350,
   speedX: 0,
   speedY: 0,
   radius: 12
@@ -28,29 +28,29 @@ function updateBall() {
   ball.speedX *= 0.98;
   ball.speedY *= 0.98;
 
-  if (ball.y - ball.radius < 0 || ball.y + ball.radius > 600) {
+  if (ball.y - ball.radius < 0 || ball.y + ball.radius > 700) {
     ball.speedY = -ball.speedY;
   }
 
   if (ball.x - ball.radius < 0) {
     score.right++;
     resetBall();
-  } else if (ball.x + ball.radius > 900) {
+  } else if (ball.x + ball.radius > 1200) {
     score.left++;
     resetBall();
   }
 }
 
 function resetBall() {
-  ball.x = 450;
-  ball.y = 300;
+  ball.x = 600;
+  ball.y = 350;
   ball.speedX = 0;
   ball.speedY = 0;
 }
 
 wss.on('connection', ws => {
   const id = Date.now().toString();
-  players[id] = { x: 100, y: 300, radius: 15, id, nick: "anon" };
+  players[id] = { x: 100, y: 350, radius: 15, id, nick: "anon" };
 
   ws.send(JSON.stringify({ type: 'id', id }));
   console.log('Player connected:', id);
@@ -66,8 +66,8 @@ wss.on('connection', ws => {
         const dy = ball.y - players[id].y;
         const dist = Math.sqrt(dx*dx + dy*dy);
         if (dist < 25) {
-          ball.speedX = dx * 0.25;
-          ball.speedY = dy * 0.25;
+          ball.speedX = dx * 0.35;
+          ball.speedY = dy * 0.35;
         }
       } else if (data.type === 'nick') {
         players[id].nick = data.nick || 'anon';
