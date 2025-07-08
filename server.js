@@ -34,7 +34,6 @@ const ball = new Ball();
 let score = { left: 0, right: 0 };
 
 function resetPositions() {
-  // Gracze respawn na swoich połowach
   let i = 0;
   for (const player of players.values()) {
     player.x = (i === 0) ? FIELD_WIDTH / 4 : FIELD_WIDTH * 3 / 4;
@@ -53,21 +52,14 @@ function distance(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
-function collideCircles(a, b) {
-  const dist = distance(a, b);
-  return dist < a.radius + b.radius;
-}
-
 function updatePhysics() {
-  // Aktualizacja pozycji piłki
+  // Update ball position and friction
   ball.x += ball.vx;
   ball.y += ball.vy;
-
-  // Tłumienie prędkości piłki (friction)
   ball.vx *= 0.95;
   ball.vy *= 0.95;
 
-  // Odbicia od ścian boiska (poza bramkami)
+  // Ball bounce top/bottom
   if (ball.y < ball.radius) {
     ball.y = ball.radius;
     ball.vy = -ball.vy;
@@ -77,77 +69,65 @@ function updatePhysics() {
     ball.vy = -ball.vy;
   }
 
-  // Sprawdź czy jest gol — bramki są na lewej i prawej krawędzi boiska,
-  // wysokość bramki: 200 px, środek pola w Y to FIELD_HEIGHT/2
-
+  // Goal detection
   if (
-    ball.x - ball.radius < 10 && 
-    ball.y > FIELD_HEIGHT/2 - 100 && ball.y < FIELD_HEIGHT/2 + 100
+    ball.x - ball.radius < 10 &&
+    ball.y > FIELD_HEIGHT / 2 - 100 &&
+    ball.y < FIELD_HEIGHT / 2 + 100
   ) {
-    // Gol dla prawej drużyny
     score.right++;
     resetPositions();
   }
-
   if (
     ball.x + ball.radius > FIELD_WIDTH - 10 &&
-    ball.y > FIELD_HEIGHT/2 - 100 && ball.y < FIELD_HEIGHT/2 + 100
+    ball.y > FIELD_HEIGHT / 2 - 100 &&
+    ball.y < FIELD_HEIGHT / 2 + 100
   ) {
-    // Gol dla lewej drużyny
     score.left++;
     resetPositions();
   }
 
-  // Gracze aktualizacja prędkości i pozycji (odpychanie się)
+  // Update players positions and friction
   for (const player of players.values()) {
-    // Zmiana pozycji na podstawie prędkości
     player.x += player.vx;
     player.y += player.vy;
-
-    // Tłumienie prędkości gracza (friction)
     player.vx *= 0.7;
     player.vy *= 0.7;
 
-    // Granice boiska
     player.x = Math.max(player.radius, Math.min(FIELD_WIDTH - player.radius, player.x));
     player.y = Math.max(player.radius, Math.min(FIELD_HEIGHT - player.radius, player.y));
   }
 
-  // Odbicia piłki od graczy
+  // Ball collision with players
   for (const player of players.values()) {
     const dx = ball.x - player.x;
     const dy = ball.y - player.y;
     const dist = Math.hypot(dx, dy);
     const minDist = ball.radius + player.radius;
-
     if (dist < minDist) {
-      // Normal wektora kolizji
       const nx = dx / dist;
       const ny = dy / dist;
-
-      // Odbij piłkę z siłą
       const overlap = minDist - dist;
 
       ball.x += nx * overlap;
       ball.y += ny * overlap;
 
-      // Prędkość piłki zmienia się lekko na podstawie ruchu gracza
       ball.vx = nx * 10 + player.vx * 0.5;
       ball.vy = ny * 10 + player.vy * 0.5;
     }
   }
 
-  // Proste odpychanie graczy od siebie (kolizja)
+  // Players repel each other
   const arrPlayers = Array.from(players.values());
-  for(let i=0; i < arrPlayers.length; i++) {
-    for(let j=i+1; j < arrPlayers.length; j++) {
+  for (let i = 0; i < arrPlayers.length; i++) {
+    for (let j = i + 1; j < arrPlayers.length; j++) {
       const p1 = arrPlayers[i];
       const p2 = arrPlayers[j];
       const dx = p2.x - p1.x;
       const dy = p2.y - p1.y;
       const dist = Math.hypot(dx, dy);
       const minDist = p1.radius + p2.radius;
-      if(dist < minDist) {
+      if (dist < minDist) {
         const overlap = minDist - dist;
         const nx = dx / dist;
         const ny = dy / dist;
@@ -163,11 +143,11 @@ function updatePhysics() {
 function broadcastGameState() {
   const payload = JSON.stringify({
     type: 'update',
-    players: Object.fromEntries([...players].map(([id, p]) => [
-      id, { x: p.x, y: p.y, radius: p.radius, nick: p.nick }
-    ])),
+    players: Object.fromEntries(
+      [...players].map(([id, p]) => [id, { x: p.x, y: p.y, radius: p.radius, nick: p.nick }])
+    ),
     ball: { x: ball.x, y: ball.y, radius: ball.radius },
-    score
+    score,
   });
 
   for (const ws of sockets.values()) {
@@ -205,11 +185,8 @@ wss.on('connection', (ws) => {
     }
 
     if (data.type === 'move') {
-      // Ogranicz do pola i prędkość max
       const dx = data.x - player.x;
       const dy = data.y - player.y;
-
-      // Limit prędkości (max 8 px/frame)
       const maxSpeed = 8;
       const dist = Math.hypot(dx, dy);
       if (dist > maxSpeed) {
@@ -222,17 +199,13 @@ wss.on('connection', (ws) => {
     }
 
     if (data.type === 'kick') {
-      // Jeśli piłka blisko to dodaj moc do piłki
       const dx = ball.x - player.x;
       const dy = ball.y - player.y;
       const dist = Math.hypot(dx, dy);
       const kickRange = player.radius + ball.radius + 10;
       if (dist < kickRange) {
-        // Kierunek kopnięcia
         const nx = dx / dist;
         const ny = dy / dist;
-
-        // Siła kopnięcia większa niż normalne odbicie
         ball.vx += nx * 20;
         ball.vy += ny * 20;
       }
@@ -245,6 +218,6 @@ wss.on('connection', (ws) => {
   });
 });
 
-setInterval(gameLoop, 1000 / 60); // 60 FPS
+setInterval(gameLoop, 1000 / 60);
 
 console.log('Server started on port 8080');
