@@ -3,7 +3,14 @@ const WebSocket = require('ws');
 const wss = new WebSocket.Server({ port: 8080 });
 
 let players = {};
-let ball = { x: 450, y: 300, speedX: 0, speedY: 0, radius: 12 };
+let ball = {
+  x: 450,
+  y: 300,
+  radius: 12,
+  speedX: 0,
+  speedY: 0,
+};
+
 let score = { left: 0, right: 0 };
 
 function broadcast(data) {
@@ -25,19 +32,28 @@ function updateBall() {
   ball.x += ball.speedX;
   ball.y += ball.speedY;
 
-  ball.speedX *= 0.98;
-  ball.speedY *= 0.98;
+  // Friction
+  ball.speedX *= 0.95;
+  ball.speedY *= 0.95;
 
-  // ściany góra/dół
-  if (ball.y - ball.radius < 0 || ball.y + ball.radius > 600) {
-    ball.speedY *= -1;
+  // Bounce top & bottom
+  if (ball.y - ball.radius < 0) {
+    ball.y = ball.radius;
+    ball.speedY = -ball.speedY;
+  }
+  if (ball.y + ball.radius > 600) {
+    ball.y = 600 - ball.radius;
+    ball.speedY = -ball.speedY;
   }
 
-  // gole
+  // Left goal
   if (ball.x - ball.radius < 0) {
     score.right++;
     resetBall();
-  } else if (ball.x + ball.radius > 900) {
+  }
+
+  // Right goal
+  if (ball.x + ball.radius > 900) {
     score.left++;
     resetBall();
   }
@@ -45,35 +61,32 @@ function updateBall() {
 
 wss.on('connection', ws => {
   const id = Date.now().toString();
-  players[id] = { x: 100, y: 300, radius: 15, id, nick: "anon" };
+  players[id] = { x: 100, y: 300, radius: 15, id, nick: 'anon' };
 
   ws.send(JSON.stringify({ type: 'id', id }));
   console.log('Player connected:', id);
 
-  ws.on('message', msg => {
+  ws.on('message', message => {
     try {
-      const data = JSON.parse(msg);
-      if (data.type === 'move') {
-        if (players[id]) {
-          players[id].x = data.x;
-          players[id].y = data.y;
+      const data = JSON.parse(message);
+      if (data.type === 'move' && players[id]) {
+        // Keep player inside the field
+        players[id].x = Math.min(900 - players[id].radius, Math.max(players[id].radius, data.x));
+        players[id].y = Math.min(600 - players[id].radius, Math.max(players[id].radius, data.y));
+      } else if (data.type === 'kick' && players[id]) {
+        const dx = ball.x - players[id].x;
+        const dy = ball.y - players[id].y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < 30) {
+          // Kick strength bigger with spacebar
+          ball.speedX = dx * 0.5;
+          ball.speedY = dy * 0.5;
         }
-      } else if (data.type === 'kick') {
-        const p = players[id];
-        if (p) {
-          const dx = ball.x - p.x;
-          const dy = ball.y - p.y;
-          const dist = Math.sqrt(dx*dx + dy*dy);
-          if (dist < 30) {
-            ball.speedX = dx * 0.3;
-            ball.speedY = dy * 0.3;
-          }
-        }
-      } else if (data.type === 'nick') {
-        if (players[id]) players[id].nick = data.nick || 'anon';
+      } else if (data.type === 'nick' && players[id]) {
+        players[id].nick = data.nick.trim().substring(0, 15) || 'anon';
       }
     } catch (e) {
-      console.error('Invalid message', e);
+      console.error('Error parsing message:', e);
     }
   });
 
