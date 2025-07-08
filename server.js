@@ -32,15 +32,13 @@ function resetBall() {
 }
 
 function updatePhysics() {
-  // Aktualizuj pozycję piłki
   ball.x += ball.vx;
   ball.y += ball.vy;
 
-  // Opór powietrza / tarcie - zwalnia piłkę
   ball.vx *= 0.94;
   ball.vy *= 0.94;
 
-  // Odbicia od ścian
+  // Odbicia od góry i dołu
   if (ball.y - ball.radius < 0) {
     ball.y = ball.radius;
     ball.vy = -ball.vy * 0.8;
@@ -50,17 +48,14 @@ function updatePhysics() {
     ball.vy = -ball.vy * 0.8;
   }
 
-  // Sprawdź bramki (po lewej i prawej)
+  // Sprawdź gole
   const goalTop = FIELD_HEIGHT / 2 - 100;
   const goalBottom = FIELD_HEIGHT / 2 + 100;
 
-  // Lewa bramka
   if (ball.x - ball.radius < 10 && ball.y > goalTop && ball.y < goalBottom) {
     score.right++;
     resetBall();
   }
-
-  // Prawa bramka
   if (ball.x + ball.radius > FIELD_WIDTH - 10 && ball.y > goalTop && ball.y < goalBottom) {
     score.left++;
     resetBall();
@@ -71,13 +66,12 @@ function updatePhysics() {
     const p = players[id];
     const dist = distance(ball.x, ball.y, p.x, p.y);
     if (dist < ball.radius + p.radius) {
-      // Odbij piłkę od gracza
       const angle = Math.atan2(ball.y - p.y, ball.x - p.x);
       const speed = 8;
       ball.vx = Math.cos(angle) * speed;
       ball.vy = Math.sin(angle) * speed;
-      
-      // Przesuń piłkę na krawędź kolizji, żeby nie wpadała w gracza
+
+      // Przesuń piłkę poza gracza
       const overlap = ball.radius + p.radius - dist;
       ball.x += Math.cos(angle) * overlap;
       ball.y += Math.sin(angle) * overlap;
@@ -99,8 +93,8 @@ wss.on('connection', (ws) => {
   players[id] = {
     id,
     nick: 'Anon',
-    x: Math.random() * (FIELD_WIDTH - 100) + 50,
-    y: Math.random() * (FIELD_HEIGHT - 100) + 50,
+    x: Math.random() * (FIELD_WIDTH - 80) + 40,
+    y: Math.random() * (FIELD_HEIGHT - 80) + 40,
     radius: 20,
   };
 
@@ -112,12 +106,21 @@ wss.on('connection', (ws) => {
 
       if (data.type === 'nick' && typeof data.nick === 'string') {
         players[id].nick = data.nick.substring(0, 15);
-      } else if (data.type === 'move' && typeof data.x === 'number' && typeof data.y === 'number') {
-        // Aktualizuj pozycję gracza w polu gry (ogranicz)
-        players[id].x = Math.min(Math.max(data.x, players[id].radius), FIELD_WIDTH - players[id].radius);
-        players[id].y = Math.min(Math.max(data.y, players[id].radius), FIELD_HEIGHT - players[id].radius);
+      } else if (
+        data.type === 'move' &&
+        typeof data.x === 'number' &&
+        typeof data.y === 'number'
+      ) {
+        // Ogranicz ruch gracza do boiska
+        players[id].x = Math.min(
+          Math.max(data.x, players[id].radius),
+          FIELD_WIDTH - players[id].radius
+        );
+        players[id].y = Math.min(
+          Math.max(data.y, players[id].radius),
+          FIELD_HEIGHT - players[id].radius
+        );
       } else if (data.type === 'kick') {
-        // Jeśli piłka jest blisko gracza, nadaj jej prędkość w kierunku ruchu
         const p = players[id];
         const dist = distance(ball.x, ball.y, p.x, p.y);
         if (dist < ball.radius + p.radius + 10) {
