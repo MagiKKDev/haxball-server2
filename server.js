@@ -32,7 +32,6 @@ function resetBall() {
 }
 
 function resetPlayerPosition(player) {
-  // Losuj miejsce w strefie swojego pola
   if (player.side === 'left') {
     player.x = 200 + Math.random() * 100;
   } else {
@@ -42,25 +41,34 @@ function resetPlayerPosition(player) {
 }
 
 function updatePhysics() {
-  // Update piłki
   ball.x += ball.vx;
   ball.y += ball.vy;
 
-  // Tarcie
+  // Tarcie piłki
   ball.vx *= 0.95;
   ball.vy *= 0.95;
 
-  // Odbicia od góry i dołu
+  // Odbicia od góry i dołu - sprężystość
   if (ball.y - ball.radius < 0) {
     ball.y = ball.radius;
-    ball.vy = -ball.vy * 0.7;
+    ball.vy = -ball.vy * 0.8;
   }
   if (ball.y + ball.radius > FIELD_HEIGHT) {
     ball.y = FIELD_HEIGHT - ball.radius;
-    ball.vy = -ball.vy * 0.7;
+    ball.vy = -ball.vy * 0.8;
   }
 
-  // Bramki
+  // Odbicia od lewej i prawej (ściany) - piłka może się oprzeć, ale odbija
+  if (ball.x - ball.radius < 0) {
+    ball.x = ball.radius;
+    ball.vx = -ball.vx * 0.8;
+  }
+  if (ball.x + ball.radius > FIELD_WIDTH) {
+    ball.x = FIELD_WIDTH - ball.radius;
+    ball.vx = -ball.vx * 0.8;
+  }
+
+  // Bramki (pozycja i zakres bramki)
   const goalTop = FIELD_HEIGHT / 2 - 100;
   const goalBottom = FIELD_HEIGHT / 2 + 100;
 
@@ -87,7 +95,7 @@ function updatePhysics() {
       ball.vx = Math.cos(angle) * speed;
       ball.vy = Math.sin(angle) * speed;
 
-      // Przesuń piłkę na zewnątrz kolizji
+      // Przesuń piłkę poza kolizję
       const overlap = ball.radius + p.radius - dist;
       ball.x += Math.cos(angle) * overlap;
       ball.y += Math.sin(angle) * overlap;
@@ -106,7 +114,6 @@ function broadcast(data) {
 
 wss.on('connection', (ws) => {
   const id = randomId();
-  // Ustawiamy stronę (pierwszy to left, drugi right)
   const leftCount = Object.values(players).filter(p => p.side === 'left').length;
   const rightCount = Object.values(players).filter(p => p.side === 'right').length;
   let side = 'left';
@@ -130,9 +137,8 @@ wss.on('connection', (ws) => {
 
       if (data.type === 'nick' && typeof data.nick === 'string') {
         players[id].nick = data.nick.substring(0, 15);
-        resetPlayerPosition(players[id]); // reset pozycji po nicku
+        resetPlayerPosition(players[id]);
       } else if (data.type === 'move' && typeof data.x === 'number' && typeof data.y === 'number') {
-        // Ogranicz ruch do boiska
         players[id].x = Math.min(Math.max(data.x, players[id].radius), FIELD_WIDTH - players[id].radius);
         players[id].y = Math.min(Math.max(data.y, players[id].radius), FIELD_HEIGHT - players[id].radius);
       } else if (data.type === 'kick') {
