@@ -1,52 +1,129 @@
-const WebSocket = require("ws");
-const { v4: uuidv4 } = require("uuid");
+const WebSocket = require('ws');
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
 
-const wss = new WebSocket.Server({ port: process.env.PORT || 8080 });
+const PORT = 8080;
+const server = http.createServer((req, res) => {
+  const filePath = req.url === '/' ? '/index.html' : req.url;
+  const fullPath = path.join(__dirname, 'public', filePath);
 
-let players = {};
-let ball = { x: 700, y: 400, vx: 0, vy: 0, r: 12 };
-
-wss.on("connection", (ws) => {
-  const id = uuidv4();
-  players[id] = { x: 100, y: 100, nick: "Gracz" };
-
-  ws.send(JSON.stringify({ type: "init", id, players, ball }));
-
-  ws.on("message", (msg) => {
-    const data = JSON.parse(msg);
-    if (data.type === "move") {
-      if (players[id]) {
-        players[id].x = data.x;
-        players[id].y = data.y;
-      }
-    } else if (data.type === "join") {
-      if (players[id]) players[id].nick = data.nick || "Gracz";
+  fs.readFile(fullPath, (err, data) => {
+    if (err) {
+      res.writeHead(404);
+      return res.end('Not found');
     }
-  });
 
-  ws.on("close", () => {
-    delete players[id];
+    const ext = path.extname(fullPath);
+    const contentType = ext === '.js' ? 'text/javascript' : 'text/html';
+    res.writeHead(200, { 'Content-Type': contentType });
+    res.end(data);
   });
 });
 
-// broadcast co 50ms
-setInterval(() => {
-  const state = JSON.stringify({ type: "state", players, ball });
-  wss.clients.forEach((client) => {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(state);
+const wss = new WebSocket.Server({ server });
+
+const rooms = {};
+
+function generateRoomId(length = 6) {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  let id = '';
+  for (let i = 0; i < length; i++) {
+    id += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return id;
+}
+
+wss.on('connection', ws => {
+  let playerId = crypto.randomUUID();
+  let currentRoom = null;
+
+  ws.on('message', message => {
+    let data;
+    try {
+      data = JSON.parse(message);
+    } catch {
+      ws.send(JSON.stringify({ type: 'error', message: 'Invalid JSON' }));
+      return;
+    }
+
+    if (data.type === 'create') {
+      const roomId = generateRoomId();
+      currentRoom = roomId;
+      rooms[roomId] = {
+        players: {},
+        ball: { x: 450, y: 300, vx: 0, vy: 0, radius: 15 }
+      };
+      rooms[roomId].players[playerId] = { id: playerId, name: data.nick, x: 150, y: 300, radius: 25 };
+      ws.send(JSON.stringify({ type: 'created', roomId, playerId }));
+    }
+
+    if (data.type === 'join') {
+      const roomId = data.roomId.toUpperCase();
+      if (!rooms[roomId]) {
+        return ws.send(JSON.stringify({ type: 'error', message: 'Pokój nie istnieje' }));
+      }
+      currentRoom = roomId;
+      rooms[roomId].players[playerId] = { id: playerId, name: data.nick, x: 750, y: 300, radius: 25 };
+      ws.send(JSON.stringify({ type: 'joined', roomId, playerId }));
+    }
+
+    if (data.type === 'move' && currentRoom && rooms[currentRoom]?.players[playerId]) {
+      const player = rooms[currentRoom].players[playerId];
+      player.x = data.x;
+      player.y = data.y;
+      if (data.kick) {
+        const dx = rooms[currentRoom].ball.x - player.x;
+        const dy = rooms[currentRoom].ball.y - player.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < player.radius + rooms[currentRoom].ball.radius + 5) {
+          rooms[currentRoom].ball.vx += dx * 0.05 * data.kickPower;
+          rooms[currentRoom].ball.vy += dy * 0.05 * data.kickPower;
+        }
+      }
     }
   });
 
-  // aktualizacja piłki
-  ball.x += ball.vx;
-  ball.y += ball.vy;
-  ball.vx *= 0.99;
-  ball.vy *= 0.99;
+  ws.on('close', () => {
+    if (currentRoom && rooms[currentRoom]) {
+      delete rooms[currentRoom].players[playerId];
+      if (Object.keys(rooms[currentRoom].players).length === 0) {
+        delete rooms[currentRoom];
+      }
+    }
+  });
+});
 
-  if (ball.x < ball.r || ball.x > 1400 - ball.r) ball.vx *= -1;
-  if (ball.y < ball.r || ball.y > 800 - ball.r) ball.vy *= -1;
+setInterval(() => {
+  for (const roomId in rooms) {
+    const room = rooms[roomId];
+    const ball = room.ball;
 
-  ball.x = Math.max(ball.r, Math.min(1400 - ball.r, ball.x));
-  ball.y = Math.max(ball.r, Math.min(800 - ball.r, ball.y));
-}, 50);
+    ball.x += ball.vx;
+    ball.y += ball.vy;
+
+    ball.vx *= 0.98;
+    ball.vy *= 0.98;
+
+    if (ball.x < 0 || ball.x > 900) ball.vx *= -1;
+    if (ball.y < 0 || ball.y > 600) ball.vy *= -1;
+
+    const data = {
+      type: 'update',
+      players: Object.values(room.players),
+      ball: room.ball
+    };
+
+    for (const pid in room.players) {
+      const player = room.players[pid];
+      if (player?.ws && player.ws.readyState === WebSocket.OPEN) {
+        player.ws.send(JSON.stringify(data));
+      }
+    }
+  }
+}, 1000 / 60);
+
+server.listen(PORT, '188.116.40.194', () => {
+  console.log(`Serwer działa na http://188.116.40.194:${PORT}`);
+});
