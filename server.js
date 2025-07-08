@@ -1,42 +1,55 @@
 const express = require("express");
 const http = require("http");
-const socketIO = require("socket.io");
+const { Server } = require("socket.io");
 
 const app = express();
 const server = http.createServer(app);
-const io = socketIO(server);
-const PORT = 3000;
+const io = new Server(server);
 
-app.use(express.static(__dirname));
+app.use(express.static("public"));
 
-let players = {};
-let ball = { x: 800, y: 450, vx: 0, vy: 0, r: 15 };
-
-function resetBall() {
-  ball.x = 800;
-  ball.y = 450;
-  ball.vx = 0;
-  ball.vy = 0;
-}
+const players = {};
+let ball = {
+  x: 400,
+  y: 300,
+  vx: 0,
+  vy: 0,
+  radius: 10
+};
 
 io.on("connection", (socket) => {
-  socket.on("join", (nick) => {
-    players[socket.id] = {
-      id: socket.id,
-      nick,
-      x: 800 + Math.random() * 100 - 50,
-      y: 450 + Math.random() * 100 - 50,
-      vx: 0,
-      vy: 0,
-      keys: {}
-    };
+  console.log("Gracz połączony:", socket.id);
 
-    socket.emit("init", { id: socket.id, players, ball });
+  players[socket.id] = {
+    x: Math.random() * 700 + 50,
+    y: Math.random() * 500 + 50,
+    vx: 0,
+    vy: 0,
+    nick: "Anon"
+  };
+
+  socket.on("setNick", (nick) => {
+    if (players[socket.id]) {
+      players[socket.id].nick = nick;
+    }
   });
 
-  socket.on("key", ({ key, pressed }) => {
-    if (players[socket.id]) {
-      players[socket.id].keys[key] = pressed;
+  socket.on("move", (dir) => {
+    const speed = 4;
+    const p = players[socket.id];
+    if (!p) return;
+    p.vx = dir.x * speed;
+    p.vy = dir.y * speed;
+  });
+
+  socket.on("kick", () => {
+    const p = players[socket.id];
+    const dx = ball.x - p.x;
+    const dy = ball.y - p.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist < 30) {
+      ball.vx += (dx / dist) * 5;
+      ball.vy += (dy / dist) * 5;
     }
   });
 
@@ -45,64 +58,44 @@ io.on("connection", (socket) => {
   });
 });
 
-setInterval(() => {
+function gameLoop() {
+  ball.x += ball.vx;
+  ball.y += ball.vy;
+
+  // Boisko - odbicia od ścian
+  if (ball.x < 10 || ball.x > 790) ball.vx *= -1;
+  if (ball.y < 10 || ball.y > 590) ball.vy *= -1;
+
+  // Tłumienie
+  ball.vx *= 0.99;
+  ball.vy *= 0.99;
+
+  // Kolizja z graczami
   for (const id in players) {
     const p = players[id];
-    let speed = 5;
-    if (p.keys["w"] || p.keys["ArrowUp"]) p.vy = -speed;
-    else if (p.keys["s"] || p.keys["ArrowDown"]) p.vy = speed;
-    else p.vy = 0;
-
-    if (p.keys["a"] || p.keys["ArrowLeft"]) p.vx = -speed;
-    else if (p.keys["d"] || p.keys["ArrowRight"]) p.vx = speed;
-    else p.vx = 0;
-
-    p.x += p.vx;
-    p.y += p.vy;
-
-    // Kolizja z piłką
     const dx = ball.x - p.x;
     const dy = ball.y - p.y;
     const dist = Math.sqrt(dx * dx + dy * dy);
-    if (dist < 40) {
-      const force = 1.5;
-      ball.vx += (dx / dist) * force;
-      ball.vy += (dy / dist) * force;
+    if (dist < 20) {
+      const angle = Math.atan2(dy, dx);
+      ball.vx += Math.cos(angle);
+      ball.vy += Math.sin(angle);
     }
 
-    // Strzał
-    if (p.keys[" "]) {
-      const dx = ball.x - p.x;
-      const dy = ball.y - p.y;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      if (dist < 45) {
-        const force = 8;
-        ball.vx += (dx / dist) * force;
-        ball.vy += (dy / dist) * force;
-      }
-    }
+    // Pozycja gracza
+    p.x += p.vx;
+    p.y += p.vy;
+
+    // Ograniczenia
+    p.x = Math.max(0, Math.min(800, p.x));
+    p.y = Math.max(0, Math.min(600, p.y));
   }
 
-  ball.x += ball.vx;
-  ball.y += ball.vy;
-  ball.vx *= 0.98;
-  ball.vy *= 0.98;
+  io.emit("state", { players, ball });
+}
 
-  // Odbicie od ścian
-  if (ball.x < ball.r || ball.x > 1600 - ball.r) ball.vx *= -1;
-  if (ball.y < ball.r || ball.y > 900 - ball.r) ball.vy *= -1;
+setInterval(gameLoop, 1000 / 60);
 
-  // Gole
-  if (
-    (ball.x < 15 && ball.y > 400 && ball.y < 500) ||
-    (ball.x > 1585 && ball.y > 400 && ball.y < 500)
-  ) {
-    resetBall();
-  }
-
-  io.emit("update", { players, ball });
-}, 1000 / 60);
-
-server.listen(PORT, () => {
-  console.log(`Serwer działa na http://localhost:${PORT}`);
+server.listen(3000, () => {
+  console.log("✅ Serwer działa na http://localhost:3000");
 });
