@@ -2,13 +2,17 @@ const WebSocket = require('ws');
 
 const wss = new WebSocket.Server({ port: 8080 });
 
+const FIELD_WIDTH = 1200;
+const FIELD_HEIGHT = 800;
+
 let players = {};
 let ball = {
-  x: 450,
-  y: 300,
+  x: FIELD_WIDTH / 2,
+  y: FIELD_HEIGHT / 2,
   radius: 12,
   speedX: 0,
   speedY: 0,
+  maxSpeed: 15,
 };
 
 let score = { left: 0, right: 0 };
@@ -22,8 +26,8 @@ function broadcast(data) {
 }
 
 function resetBall() {
-  ball.x = 450;
-  ball.y = 300;
+  ball.x = FIELD_WIDTH / 2;
+  ball.y = FIELD_HEIGHT / 2;
   ball.speedX = 0;
   ball.speedY = 0;
 }
@@ -32,28 +36,34 @@ function updateBall() {
   ball.x += ball.speedX;
   ball.y += ball.speedY;
 
+  // Limit prędkości piłki
+  if (ball.speedX > ball.maxSpeed) ball.speedX = ball.maxSpeed;
+  if (ball.speedX < -ball.maxSpeed) ball.speedX = -ball.maxSpeed;
+  if (ball.speedY > ball.maxSpeed) ball.speedY = ball.maxSpeed;
+  if (ball.speedY < -ball.maxSpeed) ball.speedY = -ball.maxSpeed;
+
   // Friction
   ball.speedX *= 0.95;
   ball.speedY *= 0.95;
 
-  // Bounce top & bottom
+  // Odbicie od góry i dołu
   if (ball.y - ball.radius < 0) {
     ball.y = ball.radius;
     ball.speedY = -ball.speedY;
   }
-  if (ball.y + ball.radius > 600) {
-    ball.y = 600 - ball.radius;
+  if (ball.y + ball.radius > FIELD_HEIGHT) {
+    ball.y = FIELD_HEIGHT - ball.radius;
     ball.speedY = -ball.speedY;
   }
 
-  // Left goal
+  // Bramka lewa
   if (ball.x - ball.radius < 0) {
     score.right++;
     resetBall();
   }
 
-  // Right goal
-  if (ball.x + ball.radius > 900) {
+  // Bramka prawa
+  if (ball.x + ball.radius > FIELD_WIDTH) {
     score.left++;
     resetBall();
   }
@@ -61,7 +71,13 @@ function updateBall() {
 
 wss.on('connection', ws => {
   const id = Date.now().toString();
-  players[id] = { x: 100, y: 300, radius: 15, id, nick: 'anon' };
+  players[id] = {
+    x: 100,
+    y: FIELD_HEIGHT / 2,
+    radius: 15,
+    id,
+    nick: 'anon',
+  };
 
   ws.send(JSON.stringify({ type: 'id', id }));
   console.log('Player connected:', id);
@@ -69,16 +85,18 @@ wss.on('connection', ws => {
   ws.on('message', message => {
     try {
       const data = JSON.parse(message);
+
       if (data.type === 'move' && players[id]) {
-        // Keep player inside the field
-        players[id].x = Math.min(900 - players[id].radius, Math.max(players[id].radius, data.x));
-        players[id].y = Math.min(600 - players[id].radius, Math.max(players[id].radius, data.y));
+        // ograniczenie ruchu gracza do boiska
+        players[id].x = Math.min(FIELD_WIDTH - players[id].radius, Math.max(players[id].radius, data.x));
+        players[id].y = Math.min(FIELD_HEIGHT - players[id].radius, Math.max(players[id].radius, data.y));
       } else if (data.type === 'kick' && players[id]) {
         const dx = ball.x - players[id].x;
         const dy = ball.y - players[id].y;
         const dist = Math.sqrt(dx * dx + dy * dy);
+
         if (dist < 30) {
-          // Kick strength bigger with spacebar
+          // Siła kopnięcia piłki
           ball.speedX = dx * 0.5;
           ball.speedY = dy * 0.5;
         }
