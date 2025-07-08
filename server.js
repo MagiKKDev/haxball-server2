@@ -1,95 +1,131 @@
-const express = require("express");
-const http = require("http");
-const WebSocket = require("ws");
-const path = require("path");
+const WebSocket = require('ws');
+const wss = new WebSocket.Server({ port: 8080 });
 
-const app = express();
-const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
+const FIELD_WIDTH = 1600;
+const FIELD_HEIGHT = 900;
 
-const PORT = 8080;
-let players = [];
-
-app.use(express.static(path.join(__dirname)));
-
-wss.on("connection", (ws) => {
-  const player = {
-    id: Date.now(),
-    x: 100 + Math.random() * 400,
-    y: 100 + Math.random() * 300,
-    vx: 0,
-    vy: 0,
-    nick: "Anon"
-  };
-
-  players.push({ ws, data: player });
-
-  ws.on("message", (msg) => {
-    const parsed = JSON.parse(msg);
-    if (parsed.type === "move") {
-      player.vx = parsed.vx;
-      player.vy = parsed.vy;
-    } else if (parsed.type === "nick") {
-      player.nick = parsed.nick || "Anon";
-    }
-  });
-
-  ws.on("close", () => {
-    players = players.filter(p => p.ws !== ws);
-  });
-});
-
+let players = {};
 let ball = {
-  x: 400,
-  y: 300,
-  vx: 0,
-  vy: 0
+  x: FIELD_WIDTH / 2,
+  y: FIELD_HEIGHT / 2,
+  radius: 15,
+  speedX: 0,
+  speedY: 0
 };
+let score = { left: 0, right: 0 };
 
-setInterval(() => {
-  for (let p of players) {
-    const d = p.data;
-    d.x += d.vx;
-    d.y += d.vy;
-
-    // Ograniczenia boiska
-    d.x = Math.max(10, Math.min(790, d.x));
-    d.y = Math.max(10, Math.min(590, d.y));
-
-    // Kolizja z piłką
-    const dx = ball.x - d.x;
-    const dy = ball.y - d.y;
-    const dist = Math.sqrt(dx*dx + dy*dy);
-    if (dist < 20) {
-      const angle = Math.atan2(dy, dx);
-      ball.vx += Math.cos(angle) * 1.5;
-      ball.vy += Math.sin(angle) * 1.5;
+function broadcast(data) {
+  wss.clients.forEach(client => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(JSON.stringify(data));
     }
+  });
+}
+
+function resetBall() {
+  ball.x = FIELD_WIDTH / 2;
+  ball.y = FIELD_HEIGHT / 2;
+  ball.speedX = 0;
+  ball.speedY = 0;
+}
+
+function updateBall() {
+  ball.x += ball.speedX;
+  ball.y += ball.speedY;
+
+  // naturalne tłumienie prędkości (opór)
+  ball.speedX *= 0.98;
+  ball.speedY *= 0.98;
+
+  // odbicie od góry i dołu boiska
+  if (ball.y < ball.radius) {
+    ball.y = ball.radius;
+    ball.speedY = -ball.speedY;
+  }
+  if (ball.y > FIELD_HEIGHT - ball.radius) {
+    ball.y = FIELD_HEIGHT - ball.radius;
+    ball.speedY = -ball.speedY;
   }
 
-  // Ruch piłki
-  ball.x += ball.vx;
-  ball.y += ball.vy;
-  ball.vx *= 0.99;
-  ball.vy *= 0.99;
+  // bramka po lewej
+  if (ball.x < ball.radius) {
+    score.right++;
+    resetBall();
+  }
 
-  // Odbicie od ścian
-  if (ball.x < 10 || ball.x > 790) ball.vx *= -1;
-  if (ball.y < 10 || ball.y > 590) ball.vy *= -1;
+  // bramka po prawej
+  if (ball.x > FIELD_WIDTH - ball.radius) {
+    score.left++;
+    resetBall();
+  }
 
-  const state = {
-    players: players.map(p => p.data),
-    ball
-  };
+  // kolizja z graczami - odbijanie piłki
+  for (const id in players) {
+    const p = players[id];
+    const dx = ball.x - p.x;
+    const dy = ball.y - p.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const minDist = ball.radius + p.radius;
 
-  const json = JSON.stringify(state);
-  players.forEach(p => {
-    if (p.ws.readyState === WebSocket.OPEN) {
-      p.ws.send(json);
+    if (dist < minDist) {
+      // normalizacja wektora odbicia
+      const nx = dx / dist;
+      const ny = dy / dist;
+
+      // ustalenie pozycji piłki tak, by się nie nakładała
+      ball.x = p.x + nx * minDist;
+      ball.y = p.y + ny * minDist;
+
+      // siła odbicia - dostosuj jeśli trzeba
+      const force = 4;
+      ball.speedX += nx * force;
+      ball.speedY += ny * force;
+    }
+  }
+}
+
+wss.on('connection', ws => {
+  const id = Date.now().toString() + Math.random().toString(36).substring(2, 8);
+  players[id] = { x: 100, y: FIELD_HEIGHT / 2, radius: 20, nick: 'Anon' };
+
+  ws.send(JSON.stringify({ type: 'id', id }));
+
+  ws.on('message', msg => {
+    const data = JSON.parse(msg);
+
+    if (data.type === 'move') {
+      // ograniczamy ruch w granicach boiska
+      players[id].x = Math.max(players[id].radius, Math.min(FIELD_WIDTH - players[id].radius, data.x));
+      players[id].y = Math.max(players[id].radius, Math.min(FIELD_HEIGHT - players[id].radius, data.y));
+    }
+
+    if (data.type === 'nick') {
+      players[id].nick = data.nick || 'Anon';
+    }
+
+    if (data.type === 'kick') {
+      const dx = ball.x - players[id].x;
+      const dy = ball.y - players[id].y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+
+      // piłka blisko, gracz kopie
+      if (dist < ball.radius + players[id].radius + 10) {
+        const force = 7;
+        ball.speedX += (dx / dist) * force;
+        ball.speedY += (dy / dist) * force;
+      }
     }
   });
-}, 16);
 
-server.listen(PORT, () => {
-  console.log(`✅ Serwer działa na http://localhost:${PORT}`);
+  ws.on('close', () => {
+    delete players[id];
+  });
 });
+
+// Główna pętla aktualizująca stan piłki i wysyłająca aktualizacje do klientów
+setInterval(() => {
+  updateBall();
+  broadcast({ type: 'update', players, ball, score });
+}, 1000 / 60);
+
+console.log('Serwer WebSocket działa na ws://localhost:8080');
