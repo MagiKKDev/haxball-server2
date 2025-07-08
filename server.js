@@ -1,14 +1,9 @@
 const WebSocket = require('ws');
 
-const wss = new WebSocket.Server({ port: 8080 });
-
 const FIELD_WIDTH = 2000;
 const FIELD_HEIGHT = 1200;
 
-const playerRadius = 22;
-const ballRadius = 18;
-
-const maxBallSpeed = 20;
+const wss = new WebSocket.Server({ port: 8080 });
 
 let players = {};
 let ball = {
@@ -16,25 +11,67 @@ let ball = {
   y: FIELD_HEIGHT / 2,
   speedX: 0,
   speedY: 0,
-  radius: ballRadius,
+  radius: 18
 };
+
 let score = { left: 0, right: 0 };
 
-function randomId() {
-  return Math.random().toString(36).substr(2, 9);
+function broadcast(data) {
+  wss.clients.forEach(client => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(JSON.stringify(data));
+    }
+  });
+}
+
+function limit(val, min, max) {
+  return Math.min(max, Math.max(min, val));
+}
+
+function updateBall() {
+  ball.x += ball.speedX;
+  ball.y += ball.speedY;
+
+  // Limit speed
+  const maxBallSpeed = 15;
+  ball.speedX = limit(ball.speedX, -maxBallSpeed, maxBallSpeed);
+  ball.speedY = limit(ball.speedY, -maxBallSpeed, maxBallSpeed);
+
+  // Friction
+  ball.speedX *= 0.93;
+  ball.speedY *= 0.93;
+
+  // Bounce top/bottom
+  if (ball.y - ball.radius < 0) {
+    ball.y = ball.radius;
+    ball.speedY = -ball.speedY * 0.9;
+  }
+  if (ball.y + ball.radius > FIELD_HEIGHT) {
+    ball.y = FIELD_HEIGHT - ball.radius;
+    ball.speedY = -ball.speedY * 0.9;
+  }
+
+  // Goal detection and reset
+  if (ball.x - ball.radius < 0) {
+    score.right++;
+    resetBall();
+  } else if (ball.x + ball.radius > FIELD_WIDTH) {
+    score.left++;
+    resetBall();
+  }
+
+  // Bounce from players (delikatne odbicie)
+  for (const id in players) {
+    const p = players[id];
+    handleBallCollision(p);
+  }
 }
 
 function resetBall() {
   ball.x = FIELD_WIDTH / 2;
   ball.y = FIELD_HEIGHT / 2;
-  ball.speedX = (Math.random() < 0.5 ? -1 : 1) * 10;
-  ball.speedY = (Math.random() * 6) - 3;
-}
-
-resetBall();
-
-function clamp(val, min, max) {
-  return Math.min(Math.max(val, min), max);
+  ball.speedX = 0;
+  ball.speedY = 0;
 }
 
 function handleBallCollision(player) {
@@ -44,164 +81,105 @@ function handleBallCollision(player) {
   const minDist = ball.radius + player.radius;
 
   if (dist < minDist) {
-    // Normalizowany wektor od gracza do piłki
+    const overlap = minDist - dist;
+
+    // Normalizuj kierunek odbicia
     const nx = dx / dist;
     const ny = dy / dist;
 
-    // Sprawdź czy piłka zbliża się do gracza (dot < 0)
+    // Wypchnij piłkę poza gracza, żeby nie wchodziła w niego
+    ball.x += nx * overlap;
+    ball.y += ny * overlap;
+
+    // Odbij wektor prędkości piłki względem normalnej kolizji
     const dot = ball.speedX * nx + ball.speedY * ny;
+    ball.speedX = ball.speedX - 2 * dot * nx;
+    ball.speedY = ball.speedY - 2 * dot * ny;
 
-    if (dot < 0) {
-      // Odbij prędkość piłki względem normalnej
-      ball.speedX = ball.speedX - 2 * dot * nx;
-      ball.speedY = ball.speedY - 2 * dot * ny;
+    // Dodaj wpływ ruchu gracza na piłkę, ale tylko delikatnie (płynnie)
+    ball.speedX += player.moveX * 0.8;
+    ball.speedY += player.moveY * 0.8;
 
-      // Dodaj wpływ ruchu gracza
-      ball.speedX += player.moveX * 1.0;
-      ball.speedY += player.moveY * 1.0;
-
-      // Ustaw piłkę tuż poza graczem, żeby nie "przyklejała się"
-      ball.x = player.x + nx * minDist;
-      ball.y = player.y + ny * minDist;
-
-      // Ogranicz prędkość piłki
-      const speed = Math.sqrt(ball.speedX * ball.speedX + ball.speedY * ball.speedY);
-      if (speed > maxBallSpeed) {
-        ball.speedX = (ball.speedX / speed) * maxBallSpeed;
-        ball.speedY = (ball.speedY / speed) * maxBallSpeed;
-      }
+    // Limit prędkości piłki po odbiciu
+    const maxSpeed = 20;
+    const speed = Math.sqrt(ball.speedX * ball.speedX + ball.speedY * ball.speedY);
+    if (speed > maxSpeed) {
+      ball.speedX = (ball.speedX / speed) * maxSpeed;
+      ball.speedY = (ball.speedY / speed) * maxSpeed;
     }
   }
-}
-
-function update() {
-  // Update player positions
-  for (const id in players) {
-    const p = players[id];
-    p.x += p.moveX * p.speed;
-    p.y += p.moveY * p.speed;
-
-    p.x = clamp(p.x, playerRadius, FIELD_WIDTH - playerRadius);
-    p.y = clamp(p.y, playerRadius, FIELD_HEIGHT - playerRadius);
-  }
-
-  // Update ball position
-  ball.x += ball.speedX;
-  ball.y += ball.speedY;
-
-  // Odbicie od ścian (górna/dolna)
-  if (ball.y < ball.radius) {
-    ball.y = ball.radius;
-    ball.speedY = -ball.speedY;
-  }
-  if (ball.y > FIELD_HEIGHT - ball.radius) {
-    ball.y = FIELD_HEIGHT - ball.radius;
-    ball.speedY = -ball.speedY;
-  }
-
-  // Bramki (po lewej i prawej)
-  const goalTop = FIELD_HEIGHT / 2 - 120;
-  const goalBottom = FIELD_HEIGHT / 2 + 120;
-
-  if (
-    ball.x < ball.radius &&
-    ball.y > goalTop &&
-    ball.y < goalBottom
-  ) {
-    // Punkt dla prawej drużyny
-    score.right++;
-    resetBall();
-  } else if (
-    ball.x > FIELD_WIDTH - ball.radius &&
-    ball.y > goalTop &&
-    ball.y < goalBottom
-  ) {
-    // Punkt dla lewej drużyny
-    score.left++;
-    resetBall();
-  }
-
-  // Odbicia piłki od graczy
-  for (const id in players) {
-    handleBallCollision(players[id]);
-  }
-}
-
-function broadcastState() {
-  const state = {
-    type: 'update',
-    players,
-    ball,
-    score,
-  };
-  const msg = JSON.stringify(state);
-  wss.clients.forEach(client => {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(msg);
-    }
-  });
 }
 
 wss.on('connection', ws => {
-  const id = randomId();
+  const id = Date.now().toString() + Math.random().toString(36).substring(2, 7);
   players[id] = {
-    id,
-    nick: 'Anon',
-    x: id.endsWith('a') ? 150 : FIELD_WIDTH - 150,
+    x: 150,
     y: FIELD_HEIGHT / 2,
-    radius: playerRadius,
+    radius: 22,
+    id,
+    nick: 'anon',
     moveX: 0,
-    moveY: 0,
-    speed: 10,
+    moveY: 0
   };
+
+  // Jeśli jest 2 graczy, ustaw drugiego po prawej stronie
+  if (Object.keys(players).length === 2) {
+    const keys = Object.keys(players);
+    players[keys[0]].x = 150;
+    players[keys[1]].x = FIELD_WIDTH - 150;
+    players[keys[1]].y = FIELD_HEIGHT / 2;
+  }
 
   ws.send(JSON.stringify({ type: 'id', id }));
 
   ws.on('message', message => {
-    let data;
     try {
-      data = JSON.parse(message);
-    } catch {
-      return;
-    }
+      const data = JSON.parse(message);
+      if (data.type === 'move' && players[id]) {
+        players[id].x = limit(data.x, players[id].radius, FIELD_WIDTH - players[id].radius);
+        players[id].y = limit(data.y, players[id].radius, FIELD_HEIGHT - players[id].radius);
 
-    if (!players[id]) return;
+        // Ruch gracza (wektor) - do odbijania piłki
+        players[id].moveX = data.moveX || 0;
+        players[id].moveY = data.moveY || 0;
+      } else if (data.type === 'kick' && players[id]) {
+        // Kopnięcie piłki - dodaj silny impuls
+        const p = players[id];
+        const dx = ball.x - p.x;
+        const dy = ball.y - p.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
 
-    if (data.type === 'nick') {
-      players[id].nick = data.nick.substring(0, 15);
-    }
+        if (dist < p.radius + ball.radius + 10) {
+          const force = 15;
+          ball.speedX += (dx / dist) * force;
+          ball.speedY += (dy / dist) * force;
 
-    if (data.type === 'move') {
-      // Dane moveX, moveY to wartości od -1 do 1
-      players[id].moveX = clamp(data.moveX, -1, 1);
-      players[id].moveY = clamp(data.moveY, -1, 1);
-    }
-
-    if (data.type === 'kick') {
-      // Spacja - silniejszy kopnięcie piłki, jeśli gracz blisko piłki
-      const p = players[id];
-      const dx = ball.x - p.x;
-      const dy = ball.y - p.y;
-      const dist = Math.sqrt(dx*dx + dy*dy);
-      if (dist < ball.radius + p.radius + 20) {
-        // Dodajemy mocne uderzenie
-        const nx = dx / dist;
-        const ny = dy / dist;
-        ball.speedX += nx * 25;
-        ball.speedY += ny * 25;
+          // Limituj prędkość piłki po kopnięciu
+          const maxForce = 25;
+          const speed = Math.sqrt(ball.speedX * ball.speedX + ball.speedY * ball.speedY);
+          if (speed > maxForce) {
+            ball.speedX = (ball.speedX / speed) * maxForce;
+            ball.speedY = (ball.speedY / speed) * maxForce;
+          }
+        }
+      } else if (data.type === 'nick' && players[id]) {
+        players[id].nick = data.nick.trim().substring(0, 15) || 'anon';
       }
+    } catch (e) {
+      console.error('Błąd parsowania wiadomości:', e);
     }
   });
 
   ws.on('close', () => {
     delete players[id];
+    console.log('Gracz rozłączony:', id);
   });
 });
 
-// Główna pętla 60fps
+// 60 FPS
 setInterval(() => {
-  update();
-  broadcastState();
+  updateBall();
+  broadcast({ type: 'update', players, ball, score });
 }, 1000 / 60);
 
-console.log('Serwer uruchomiony na porcie 8080');
+console.log('Server działa na ws://localhost:8080');
