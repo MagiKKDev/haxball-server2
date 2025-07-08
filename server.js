@@ -33,11 +33,9 @@ function updateBall() {
   ball.x += ball.speedX;
   ball.y += ball.speedY;
 
-  // opór powietrza / tłumienie prędkości
   ball.speedX *= 0.98;
   ball.speedY *= 0.98;
 
-  // odbicie od góry i dołu boiska
   if (ball.y < ball.radius) {
     ball.y = ball.radius;
     ball.speedY = -ball.speedY;
@@ -47,7 +45,6 @@ function updateBall() {
     ball.speedY = -ball.speedY;
   }
 
-  // bramki (lewa i prawa)
   if (ball.x < ball.radius) {
     score.right++;
     resetBall();
@@ -57,7 +54,6 @@ function updateBall() {
     resetBall();
   }
 
-  // kolizja piłki z graczami (odbicie)
   for (const id in players) {
     const p = players[id];
     const dx = ball.x - p.x;
@@ -66,15 +62,12 @@ function updateBall() {
     const minDist = ball.radius + p.radius;
 
     if (dist < minDist) {
-      // odbicie piłki
       const nx = dx / dist;
       const ny = dy / dist;
 
-      // popraw pozycję piłki, żeby się nie wbiła w gracza
       ball.x = p.x + nx * minDist;
       ball.y = p.y + ny * minDist;
 
-      // delikatne odbicie od piłki (lekka siła)
       const force = 3;
       ball.speedX += nx * force;
       ball.speedY += ny * force;
@@ -89,18 +82,15 @@ function resolvePlayerCollision(p1, p2) {
   const minDist = p1.radius + p2.radius;
 
   if (dist < minDist && dist > 0) {
-    // przesuwamy graczy, żeby się nie nakładali
     const overlap = minDist - dist;
     const nx = dx / dist;
     const ny = dy / dist;
 
-    // przesuwamy połowę odległości każdego gracza w przeciwną stronę
     p1.x -= nx * overlap / 2;
     p1.y -= ny * overlap / 2;
     p2.x += nx * overlap / 2;
     p2.y += ny * overlap / 2;
 
-    // Ograniczamy pozycje w obrębie boiska
     p1.x = Math.max(p1.radius, Math.min(FIELD_WIDTH - p1.radius, p1.x));
     p1.y = Math.max(p1.radius, Math.min(FIELD_HEIGHT - p1.radius, p1.y));
     p2.x = Math.max(p2.radius, Math.min(FIELD_WIDTH - p2.radius, p2.x));
@@ -123,7 +113,6 @@ wss.on('connection', ws => {
     }
 
     if (data.type === 'move') {
-      // aktualizuj pozycję gracza, ogranicz w granicach boiska
       players[id].x = Math.max(players[id].radius, Math.min(FIELD_WIDTH - players[id].radius, data.x));
       players[id].y = Math.max(players[id].radius, Math.min(FIELD_HEIGHT - players[id].radius, data.y));
     }
@@ -133,7 +122,6 @@ wss.on('connection', ws => {
     }
 
     if (data.type === 'kick') {
-      // jeśli piłka blisko, kopnij mocniej piłkę
       const dx = ball.x - players[id].x;
       const dy = ball.y - players[id].y;
       const dist = Math.sqrt(dx * dx + dy * dy);
@@ -151,11 +139,9 @@ wss.on('connection', ws => {
   });
 });
 
-// Główna pętla aktualizująca stan i wysyłająca do klientów
 setInterval(() => {
   updateBall();
 
-  // rozwiązanie kolizji gracz - gracz
   const playerIds = Object.keys(players);
   for (let i = 0; i < playerIds.length; i++) {
     for (let j = i + 1; j < playerIds.length; j++) {
