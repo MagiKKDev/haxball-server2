@@ -1,15 +1,11 @@
 {
-  "name": "haxball-server",
+  "name": "haxball-backend",
   "version": "1.0.0",
-  "description": "Simple 1v1 Haxball server",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
     "ws": "^8.13.0"
-  },
-  "engines": {
-    "node": ">=14"
   }
 }
